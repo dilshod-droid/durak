@@ -1,0 +1,12 @@
+{
+  "language": "uz",
+  "sound": true,
+  "sound_vol": 0.8,
+  "music": false,
+  "music_vol": 0.6,
+  "vibration": true,
+  "anim_speed": 1.0,
+  "theme": "dark",
+  "game_mode": "podkidnoy",
+  "difficulty": "medium"
+}

@@ -1,0 +1,10 @@
+*.pyc
+__pycache__/
+.pytest_cache/
+.buildozer/
+bin/
+*.spec
+!buildozer.spec
+.gradle/
+local.properties
+.DS_Store

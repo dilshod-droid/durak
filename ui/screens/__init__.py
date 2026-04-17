@@ -1,0 +1,1 @@
+"""Durak — Ekranlar Paketi"""
