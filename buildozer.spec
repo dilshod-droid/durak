@@ -10,7 +10,7 @@ requirements = python3,kivy==2.3.0,pillow,plyer,kivymd==1.2.0
 
 orientation = portrait
 fullscreen = 1
-android.archs = arm64-v8a, armeabi-v7a
+android.archs = arm64-v8a
 android.allow_backup = True
 
 # Permissions
