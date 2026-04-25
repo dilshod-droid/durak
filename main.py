@@ -1,9 +1,23 @@
 """
 main.py — DURAK Kivy App Entry Point
 Premium Android Karta O'yini v1.0.0
+
+Tuzatishlar:
+  - logging.basicConfig qo'shildi (debug va xato xabarlar)
+  - is_multiplayer atributi boshlang'ich qiymat bilan
+  - on_stop: stats.close() aniq chaqiriladi
 """
 import os
 import sys
+import logging
+
+# ─── Logging sozlash ─────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level   = logging.DEBUG,
+    format  = '[%(levelname)s] %(name)s: %(message)s',
+    handlers= [logging.StreamHandler(sys.stdout)],
+)
+logger = logging.getLogger('DurakApp')
 
 # ─── Desktop oyna o'lchamini Android dan oldin o'rnatish ─────────────────────
 from kivy.config import Config
@@ -58,9 +72,10 @@ class DurakApp(App):
     title = 'Durak'
 
     # ─── Global holatlar ──────────────────────────────────────────────────
-    game_difficulty: str = 'medium'
-    game_mode:       str = 'podkidnoy'
+    game_difficulty: str  = 'medium'
+    game_mode:       str  = 'podkidnoy'
     game_result:     dict = {}
+    is_multiplayer:  bool = False      # Multiplayer rejim bayrog'i
 
     # ─── Managerlar ───────────────────────────────────────────────────────
     audio    = None
@@ -109,10 +124,14 @@ class DurakApp(App):
         from ui.screens.settings_screen     import SettingsScreen
         from ui.screens.stats_screen        import StatsScreen
         from ui.screens.rules_screen        import RulesScreen
+        from ui.screens.mode_selection_screen import ModeSelectionScreen
+        from ui.screens.online_setup_screen  import OnlineSetupScreen
 
         screens = [
             SplashScreen(name='splash'),
             MainMenuScreen(name='main_menu'),
+            ModeSelectionScreen(name='mode_selection'),
+            OnlineSetupScreen(name='online_setup'),
             DifficultyScreen(name='difficulty'),
             GameScreen(name='game'),
             ResultScreen(name='result'),
@@ -189,10 +208,14 @@ class DurakApp(App):
                 print("[App] Dastur assetlarsiz davom etadi...")
 
     def on_stop(self):
+        """Ilova yopilganda barcha resurslarni tozalash"""
         if self.audio:
             self.audio.stop_all()
         if self.settings:
             self.settings.save()
+        if self.stats:
+            self.stats.close()   # __del__ ga ishonmasdan aniq yopish
+        logger.info("[App] Ilova to'xtatildi, resurslar tozalandi")
 
     # ─── Android orqa tugmasi ─────────────────────────────────────────────
     def on_key_down(self, window, key, *args):

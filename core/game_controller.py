@@ -1,9 +1,18 @@
 """
 core/game_controller.py — O'yin boshqaruvchisi
 Barcha o'yin qoidalarini amalga oshiradi.
+
+Tuzatishlar:
+  - _check_winner: draw (ikkalasi bir vaqtda bo'sh) holati ham qayta ishlandi
+  - transfer_attack: 2-o'yinchi rejimda nima uchun ishlamasligini aniq izohlaydi
+  - _execute_ai_turn_clock: try/finally — exception bo'lsa ham _ai_thinking reset bo'ladi
+  - _ai_attack: loop MAX_EXTRA_ATTACKS bilan cheklangan
 """
 import time
+import logging
 from typing import List, Optional, Callable, Tuple
+
+from kivy.clock import Clock
 
 from core.card       import Card
 from core.deck       import Deck
@@ -11,6 +20,11 @@ from core.player     import Player
 from core.game_state import GameState, PHASE_ATTACK, PHASE_DEFENSE, PHASE_REFILL, PHASE_END
 from core.ai_player  import AIPlayer
 from core.constants  import HAND_SIZE, AI_THINK_DELAY
+
+logger = logging.getLogger(__name__)
+
+# AI bir turda maksimal qo'shimcha hujum kartalari
+MAX_EXTRA_ATTACKS = 3
 
 
 class GameController:
@@ -25,6 +39,9 @@ class GameController:
         self.mode:       str       = mode         # 'podkidnoy' | 'perevodnoy'
         self.ai:         AIPlayer  = AIPlayer(difficulty)
 
+        # ─── Rekursiyadan himoya: AI faqat bitta navbatda aktiv ──────────
+        self._ai_thinking: bool = False
+
         # ─── Callback-lar (UI ularni o'rnatadi) ──────────────────────────
         self.on_state_changed:    Optional[Callable] = None
         self.on_invalid_move:     Optional[Callable] = None
@@ -33,6 +50,37 @@ class GameController:
         self.on_ai_turn_start:    Optional[Callable] = None
         self.on_ai_turn_end:      Optional[Callable] = None
 
+        # ─── Multiplayer ──────────────────────────────────────────────────
+        from core.network_manager import NetworkManager
+        self.net = NetworkManager.get_instance()
+        self.is_multiplayer = False
+        self.net.on_data_received = self._on_network_data
+
+    def _on_network_data(self, data: dict):
+        """Tarmoqdan kelgan xabarlarni qayta ishlash"""
+        t = data.get('type')
+        if t == 'state_sync':
+            self.state.from_dict(data['state'])
+            self._notify_state_changed()
+        elif t == 'action':
+            action = data.get('action')
+            # Raqib harakatini bajarish
+            if action == 'attack':
+                from core.card import Card
+                self.attack(Card.from_dict(data['card']), remote=True)
+            elif action == 'defend':
+                from core.card import Card
+                self.defend(Card.from_dict(data['attack_card']), 
+                            Card.from_dict(data['defense_card']), remote=True)
+            elif action == 'take':
+                self.take_cards(remote=True)
+            elif action == 'end_turn':
+                self.end_turn(remote=True)
+        elif t == 'ready':
+            # Client tayyor bo'lganda Host unga stateni jo'natadi
+            if self.is_multiplayer and self.net.mode == 'host':
+                self.net.send_data({'type': 'state_sync', 'state': self.state.to_dict()})
+
     # =========================================================================
     # O'YIN BOSHLASH
     # =========================================================================
@@ -40,23 +88,38 @@ class GameController:
         """Yangi o'yin boshlash"""
         st = self.state
 
+        if self.is_multiplayer:
+            if self.net.mode == 'join':
+                # Client: Hostdan state kutamiz. Hozircha stateni tozalaymiz.
+                st.phase = PHASE_ATTACK
+                return
+            else:
+                # Host: O'yinni boshlaydi va Clientga jo'natadi
+                pass
+
         # Qo'da yaratish va aralashtirish
         st.deck = Deck()
         st.deck.shuffle()
         st.deck.set_trump()
 
         # O'yinchilar
-        human = Player("Siz",    is_ai=False)
-        ai    = Player("Raqib",  is_ai=True)
-        st.players = [human, ai]
+        if self.is_multiplayer:
+            # Multiplayerda ismlar tarmoqdan keladi
+            human = Player("Siz", is_ai=False)
+            peer  = Player(self.net.peer_name, is_ai=False) # Raqib AI emas
+            st.players = [human, peer]
+        else:
+            human = Player("Siz",    is_ai=False)
+            ai    = Player("Raqib",  is_ai=True)
+            st.players = [human, ai]
 
         # Karta berish
-        human.add_cards(st.deck.deal(HAND_SIZE))
-        ai.add_cards(st.deck.deal(HAND_SIZE))
+        st.players[0].add_cards(st.deck.deal(HAND_SIZE))
+        st.players[1].add_cards(st.deck.deal(HAND_SIZE))
 
         # Qo'lni kozirga qarab saralash
-        human.sort_hand_trump_last(st.trump_suit)
-        ai.sort_hand_trump_last(st.trump_suit)
+        for p in st.players:
+            p.sort_hand_trump_last(st.trump_suit)
 
         # Birinchi hujumchini aniqlash
         self._determine_first_attacker()
@@ -66,14 +129,18 @@ class GameController:
 
         self._notify_state_changed()
 
-        # Agar AI birinchi hujum qilsa
-        if st.attacker.is_ai:
+        # Multiplayerda Host ma'lumotni Clientga jo'natadi
+        if self.is_multiplayer and self.net.mode == 'host':
+            self.net.send_data({'type': 'state_sync', 'state': st.to_dict()})
+
+        # Agar AI bo'lsa (offline rejimda)
+        if not self.is_multiplayer and st.attacker.is_ai:
             self._schedule_ai_turn()
 
     # =========================================================================
     # HUJUM
     # =========================================================================
-    def attack(self, card: Card) -> Tuple[bool, str]:
+    def attack(self, card: Card, remote: bool = False) -> Tuple[bool, str]:
         """
         Hujumchi karta tashlaydi.
         Qaytaradi: (muvaffaqiyat, xabar)
@@ -98,8 +165,17 @@ class GameController:
 
         self._notify_state_changed()
 
-        # Agar himoyachi AI bo'lsa
-        if st.defender.is_ai:
+        # Multiplayer sinxronizatsiyasi
+        if self.is_multiplayer:
+            if not remote:
+                # Mahalliy o'yinchi harakati -> Raqibga jo'natish
+                self.net.send_data({'type': 'action', 'action': 'attack', 'card': card.to_dict()})
+            if self.net.mode == 'host':
+                # Host har doim state ni yangilab turadi
+                self.net.send_data({'type': 'state_sync', 'state': st.to_dict()})
+
+        # Agar himoyachi AI bo'lsa (offline)
+        if not self.is_multiplayer and st.defender.is_ai:
             self._schedule_ai_turn()
 
         return True, "OK"
@@ -136,7 +212,7 @@ class GameController:
     # =========================================================================
     # HIMOYA
     # =========================================================================
-    def defend(self, attack_card: Card, defense_card: Card) -> Tuple[bool, str]:
+    def defend(self, attack_card: Card, defense_card: Card, remote: bool = False) -> Tuple[bool, str]:
         """
         Himoyachi hujum kartasini yopadi.
         """
@@ -166,7 +242,18 @@ class GameController:
 
         self._notify_state_changed()
 
-        if st.phase == PHASE_ATTACK and st.attacker.is_ai:
+        # Multiplayer sinxronizatsiyasi
+        if self.is_multiplayer:
+            if not remote:
+                self.net.send_data({
+                    'type': 'action', 'action': 'defend',
+                    'attack_card': attack_card.to_dict(),
+                    'defense_card': defense_card.to_dict()
+                })
+            if self.net.mode == 'host':
+                self.net.send_data({'type': 'state_sync', 'state': st.to_dict()})
+
+        if not self.is_multiplayer and st.phase == PHASE_ATTACK and st.attacker.is_ai:
             self._schedule_ai_turn()
 
         return True, "OK"
@@ -174,7 +261,7 @@ class GameController:
     # =========================================================================
     # KARTALAR OLISH (himoyachi yopib berolmaydi)
     # =========================================================================
-    def take_cards(self) -> bool:
+    def take_cards(self, remote: bool = False) -> bool:
         """
         Himoyachi barcha stol kartalarini oladi.
         Navbat o'tmaydi (hujumchi yana hujum qiladi).
@@ -197,8 +284,15 @@ class GameController:
         self._check_winner()
         self._notify_state_changed()
 
+        # Multiplayer sinxronizatsiyasi
+        if self.is_multiplayer:
+            if not remote:
+                self.net.send_data({'type': 'action', 'action': 'take'})
+            if self.net.mode == 'host':
+                self.net.send_data({'type': 'state_sync', 'state': st.to_dict()})
+
         # Agar AI hujumchi bo'lsa
-        if not st.is_game_over and st.attacker.is_ai:
+        if not self.is_multiplayer and not st.is_game_over and st.attacker.is_ai:
             self._schedule_ai_turn()
 
         return True
@@ -206,7 +300,7 @@ class GameController:
     # =========================================================================
     # TURNI YAKUNLASH (himoyachi barcha yopdi)
     # =========================================================================
-    def end_turn(self) -> Tuple[bool, str]:
+    def end_turn(self, remote: bool = False) -> Tuple[bool, str]:
         """
         Himoyachi muvaffaqiyatli yopgandan keyin turn tugaydi.
         Kartalar chetga, navbat o'tadi.
@@ -240,7 +334,14 @@ class GameController:
         self._check_winner()
         self._notify_state_changed()
 
-        if not st.is_game_over and st.attacker.is_ai:
+        # Multiplayer sinxronizatsiyasi
+        if self.is_multiplayer:
+            if not remote:
+                self.net.send_data({'type': 'action', 'action': 'end_turn'})
+            if self.net.mode == 'host':
+                self.net.send_data({'type': 'state_sync', 'state': st.to_dict()})
+
+        if not self.is_multiplayer and not st.is_game_over and st.attacker.is_ai:
             self._schedule_ai_turn()
 
         return True, "OK"
@@ -250,8 +351,9 @@ class GameController:
     # =========================================================================
     def transfer_attack(self, card: Card) -> Tuple[bool, str]:
         """
-        Perevodnoy rejimda himoyachi hujumni keyingi o'yinchiga o'tkazadi.
-        Faqat bir xil qiymatdagi karta bilan.
+        Perevodnoy rejimda himoyachi hujumni o'tkazadi.
+        Qoida: faqat bir xil qiymatdagi karta bilan, faqat 3+ o'yinchida.
+        2 o'yinchili versiyada bu harakat qoidaga ko'ra taqiqlangan.
         """
         if self.mode != 'perevodnoy':
             return False, "Perevodnoy rejim yoqilmagan"
@@ -260,35 +362,72 @@ class GameController:
         if st.phase != PHASE_DEFENSE:
             return False, "Himoya fazasi emas"
 
-        # Barcha hujum kartalari bir xil qiymatda bo'lishi kerak
         if not st.table:
             return False, "Stol bo'sh"
 
+        # 2 o'yinchili o'yinda Perevodnoy qoidaga ko'ra ishlamaydi
+        # (TZ § 3.5: "Faqat 2 o'yinchida bu rejim ishlamaydi")
+        if len(st.players) <= 2:
+            return False, "Perevodnoy faqat 3 va undan ko'p o'yinchida ishlaydi"
+
+        # Bir xil qiymat tekshiruvi
         first_atk = st.table[0][0]
         if card.value != first_atk.value:
-            return False, "Bir xil qiymat kerak"
+            return False, f"Bir xil qiymat kerak ({first_atk.display_value})"
 
-        # Stoldagi yopilmagan kartalar bor bo'lmasligi kerak (2 o'yinchida)
-        # 2 o'yinchida Perevodnoy ishlamaydi
-        # Bu versiyada 2 o'yinchi bo'lgani uchun:
-        return False, "2 o'yinchida Perevodnoy ishlamaydi"
+        # Himoyachi o'z qo'lida bu karta borligini tekshiruvi
+        if not st.defender.has_card(card):
+            return False, "Bu karta qo'lingizda yo'q"
+
+        # Hujumni keyingi o'yinchiga o'tkazish
+        st.table.append((card, None))
+        st.defender.remove_card(card)
+        # Rollarni aylantirish: himoyachi → hujumchi bo'ladi
+        # (3+ o'yinchi uchun to'liq implementatsiya keyingi versiyada)
+        self._notify_state_changed()
+        return True, "Hujum o'tkazildi"
 
     # =========================================================================
     # AI NAVBATI
     # =========================================================================
     def _schedule_ai_turn(self):
-        """AI navbatini kechiktirish bilan bajarish (UI callback orqali)"""
+        """
+        AI navbatini Clock.schedule_once orqali kechiktirish.
+        _ai_thinking flag ikki marta scheduling ni bloklaydi.
+        """
+        if self._ai_thinking:
+            return  # Allaqachon rejalashtirilgan — ikkinchi marta shart emas
+
+        self._ai_thinking = True
+
         if self.on_ai_turn_start:
             self.on_ai_turn_start()
+
+        Clock.schedule_once(self._execute_ai_turn_clock, AI_THINK_DELAY)
+
+    def _execute_ai_turn_clock(self, dt):
+        """
+        Clock.schedule_once tomonidan chaqiriladigan wrapper.
+        dt — Kivy Clock beradi, biz foydalanmaymiz.
+        try/finally: exception bo'lsa ham _ai_thinking flag doim tozalanadi.
+        """
+        try:
+            self.execute_ai_turn()
+        except Exception as e:
+            logger.error(f"[GameController] AI turn xatosi: {e}", exc_info=True)
+        finally:
+            self._ai_thinking = False
 
     def execute_ai_turn(self):
         """
         AI harakatini bajarish.
-        UI bu metodini AI delay tugagandan keyin chaqiradi.
+        To'g'ridan-to'g'ri yoki _execute_ai_turn_clock orqali chaqiriladi.
         """
         st = self.state
 
         if st.is_game_over:
+            if self.on_ai_turn_end:
+                self.on_ai_turn_end()
             return
 
         if st.attacker.is_ai and st.phase == PHASE_ATTACK:
@@ -305,25 +444,37 @@ class GameController:
         card = self.ai.choose_attack_card(st.attacker.hand, st.table, st.trump_suit)
 
         if card:
-            self.attack(card)
-            # AI qo'shimcha karta tashlashini tekshirish
-            # (Podkidnoy: AI maksimal 2 ta qo'shadi)
-            extra_attempts = 0
-            while (st.phase == PHASE_ATTACK and st.all_defended and
-                   st.can_add_attack and extra_attempts < 2):
-                extra = self.ai.choose_attack_card(st.attacker.hand, st.table, st.trump_suit)
-                if extra:
-                    self.add_attack_card(extra)
-                    extra_attempts += 1
-                else:
-                    break
+            ok, msg = self.attack(card)
+            if not ok:
+                logger.warning(f"[AI] Hujum muvaffaqiyatsiz: {msg}")
+                return
 
-            # Agar barcha yopilgan bo'lsa — turn tugatish
-            if st.all_defended and not st.undefended_cards:
+            # Podkidnoy: AI qo'shimcha kartalar tashlaydi (MAX_EXTRA_ATTACKS ga qadar)
+            extra_attempts = 0
+            prev_table_size = len(st.table)
+            while (extra_attempts < MAX_EXTRA_ATTACKS and
+                   st.phase == PHASE_ATTACK and
+                   st.all_defended and
+                   st.can_add_attack and
+                   not st.is_game_over):
+                extra = self.ai.choose_attack_card(st.attacker.hand, st.table, st.trump_suit)
+                if not extra:
+                    break
+                ok2, _ = self.add_attack_card(extra)
+                if not ok2:
+                    break
+                extra_attempts += 1
+                # Stol hajmi o'zgarmasa — chiqamiz (sonsiz loop himoyasi)
+                if len(st.table) == prev_table_size:
+                    break
+                prev_table_size = len(st.table)
+
+            # Barcha kartalar yopilgan bo'lsa turni tugat
+            if not st.is_game_over and st.all_defended and not st.undefended_cards:
                 self.end_turn()
         else:
-            # Karta yo'q yoki tura olmaydi → turni tugat
-            if st.all_defended:
+            # Tashlash uchun yaroqli karta yo'q → turni tugat
+            if st.all_defended and not st.is_game_over:
                 self.end_turn()
 
     def _ai_defend(self):
@@ -403,19 +554,35 @@ class GameController:
     def _check_winner(self):
         """
         G'olibni tekshirish:
-        Qo'da tugagan + qo'l bo'sh → g'olib
+          - Qo'da bo'sh va biror o'yinchi qo'li bo'sh → g'olib
+          - Ikkalasi ham bir vaqtda qo'li bo'sh (draw) → hujumchi g'olib, himoyachi "durak"
         """
         st = self.state
-        if st.deck.is_empty:
-            for p in st.players:
-                if p.has_won:
-                    st.winner = p
-                    st.loser  = next(pl for pl in st.players if pl != p)
-                    st.phase  = PHASE_END
-                    st.elapsed_time = time.time() - st.start_time
-                    if self.on_game_over:
-                        self.on_game_over(st.winner, st.loser)
-                    return
+        if not st.deck.is_empty:
+            return   # Qo'da hali karta bor — o'yin davom etadi
+
+        winners = [p for p in st.players if p.has_won]
+
+        if not winners:
+            return   # Hech kim hali g'olib bo'lmagan
+
+        if len(winners) == len(st.players):
+            # Draw: ikkalasi ham bir vaqtda qo'li bo'shib qoldi
+            # Qoidaga ko'ra bunday holatda hujumchi g'olib, himoyachi durak
+            st.winner = st.attacker
+            st.loser  = st.defender
+            logger.info("[Game] Tengsizlik (draw): hujumchi g'olib deb hisoblanadi")
+        else:
+            st.winner = winners[0]
+            remaining = [p for p in st.players if p != st.winner]
+            # Eng ko'p kartasi bor o'yinchi "durak"
+            st.loser = max(remaining, key=lambda p: p.card_count) if remaining else None
+
+        st.phase = PHASE_END
+        st.elapsed_time = time.time() - st.start_time
+        logger.info(f"[Game] O'yin tugadi — G'olib: {st.winner}, Durak: {st.loser}")
+        if self.on_game_over:
+            self.on_game_over(st.winner, st.loser)
 
     def _notify_state_changed(self):
         if self.on_state_changed:
@@ -437,3 +604,7 @@ class GameController:
     @property
     def is_human_defender(self) -> bool:
         return self.state.defender and not self.state.defender.is_ai
+
+    @property
+    def is_human_turn(self) -> bool:
+        return self.is_human_attacker or self.is_human_defender

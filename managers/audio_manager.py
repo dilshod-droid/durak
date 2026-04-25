@@ -1,10 +1,19 @@
 """
 managers/audio_manager.py — Ovoz boshqaruvchisi
 Kivy SoundLoader + looping music orqali SFX va musiqa.
+
+Tuzatishlar:
+  - play_music() to'liq implement qilindi
+  - on_game_start() mavjud fayllarni tekshiradi
+  - logging qo'shildi
+  - Barcha exception-lar logging bilan yoziladi
 """
 import os
+import logging
 from typing import Dict, Optional, List
 from core.constants import SOUNDS_DIR, MUSIC_DIR
+
+logger = logging.getLogger(__name__)
 
 
 class AudioManager:
@@ -43,28 +52,39 @@ class AudioManager:
 
         try:
             from kivy.core.audio import SoundLoader
+            loaded = 0
             for key, filename in sfx_files.items():
                 path = os.path.join(SOUNDS_DIR, filename)
                 if os.path.exists(path):
                     sound = SoundLoader.load(path)
                     if sound:
                         self._sfx[key] = sound
+                        loaded += 1
+                    else:
+                        logger.warning(f"[Audio] SFX yuklanmadi: {filename}")
+                else:
+                    logger.debug(f"[Audio] SFX fayl topilmadi (o'tkazib yuborildi): {path}")
+            logger.info(f"[Audio] {loaded}/{len(sfx_files)} SFX yuklandi")
         except Exception as e:
-            print(f"[Audio] SFX yuklanmadi: {e}")
+            logger.error(f"[Audio] SFX yuklashda xato: {e}")
 
     def _load_music(self, track_name: str):
         """Musiqa faylini yuklash"""
         try:
             from kivy.core.audio import SoundLoader
             path = os.path.join(MUSIC_DIR, track_name)
-            if os.path.exists(path):
-                music = SoundLoader.load(path)
-                if music:
-                    music.loop   = True
-                    music.volume = self._music_volume
-                    return music
+            if not os.path.exists(path):
+                logger.debug(f"[Audio] Musiqa fayli topilmadi: {path}")
+                return None
+            music = SoundLoader.load(path)
+            if music:
+                music.loop   = True
+                music.volume = self._music_volume
+                logger.info(f"[Audio] Musiqa yuklandi: {track_name}")
+                return music
+            logger.warning(f"[Audio] SoundLoader musiqa yarata olmadi: {track_name}")
         except Exception as e:
-            print(f"[Audio] Musiqa yuklanmadi: {e}")
+            logger.error(f"[Audio] Musiqa yuklanmadi ({track_name}): {e}")
         return None
 
     # ─── SFX ──────────────────────────────────────────────────────────────────
@@ -96,8 +116,11 @@ class AudioManager:
             try:
                 self._music.play()
                 self._current_track = track_name
-            except Exception:
-                pass
+                logger.info(f"[Audio] Musiqa boshlandi: {track_name} (loop={loop})")
+            except Exception as e:
+                logger.error(f"[Audio] Musiqa ijro xatosi: {e}")
+                self._music = None
+                self._current_track = ''
 
     def play_playlist(self, tracks: List[str]):
         """Pleylistni ketma-ket chalish"""
@@ -164,9 +187,26 @@ class AudioManager:
     def on_invalid(self):      self.play_sfx('invalid')
 
     def on_main_menu(self):    self.play_music('menu_theme.wav', loop=True)
+
     def on_game_start(self):
-        self.play_playlist(['track1.wav', 'track2.wav', 'track3.wav'])
-        
+        """
+        O'yin boshlanganda musiqa chalish.
+        Mavjud trek fayllarini avtomatik aniqlaydi.
+        """
+        # Imkon qadar playlist bilan, aks holda yagona trek
+        available_tracks = []
+        for candidate in ['track1.wav', 'track2.wav', 'track3.wav',
+                           'game_theme.wav', 'game_theme.mp3']:
+            if os.path.exists(os.path.join(MUSIC_DIR, candidate)):
+                available_tracks.append(candidate)
+
+        if len(available_tracks) > 1:
+            self.play_playlist(available_tracks)
+        elif len(available_tracks) == 1:
+            self.play_music(available_tracks[0], loop=True)
+        else:
+            logger.debug("[Audio] O'yin musiqasi topilmadi, ovozisiz davom etiladi")
+
     def on_victory(self):
         self.stop_music()
         self.play_sfx('win')

@@ -1,35 +1,45 @@
 """
 ui/widgets/card_widget.py — Karta Widjeti
-Karta tasvirini ko'rsatadi, tanlash va drag & drop imkoniyati.
+Luxury dizayn: chiroyli orqa tomon, aniq yuz, drag & drop, glow effekti.
 """
 import os
 from kivy.uix.widget      import Widget
-from kivy.uix.image       import Image as KivyImage
 from kivy.graphics        import (Color, RoundedRectangle, Line,
-                                   Rectangle, Ellipse)
+                                   Rectangle, Ellipse, SmoothLine)
 from kivy.animation       import Animation
-from kivy.properties      import ObjectProperty, BooleanProperty, NumericProperty
+from kivy.properties      import ObjectProperty, BooleanProperty
+from kivy.clock           import Clock
 from core.constants       import (COLORS, CARD_W, CARD_H, CARD_RADIUS,
-                                   CARDS_DIR)
+                                   CARDS_DIR, VALUE_NAMES, SUIT_SYMBOLS)
 
 
 BACK_IMG  = os.path.join(CARDS_DIR, 'card_back.png')
-EMPTY_IMG = os.path.join(CARDS_DIR, 'empty_slot.png')
+
+
+def _core_label(text, font_size, bold=False, color=(1,1,1,1), font_name='DejaVu'):
+    from kivy.core.text import Label as CL
+    lbl = CL(text=text, font_name=font_name, font_size=font_size,
+              bold=bold, color=color, halign='center')
+    lbl.refresh()
+    return lbl.texture
 
 
 class CardWidget(Widget):
     """
     Bitta kartani ko'rsatuvchi widget.
-    - face_up=True  → karta rasmi
-    - face_up=False → yopiq orqa tomon
-    - selected       → yuqoriga ko'tariladi + glow
-    - draggable      → drag & drop imkoniyati
+    - face_up=True  → karta rasmi (yuzi)
+    - face_up=False → luxury orqa tomon
+    - selected       → yuqoriga ko'tariladi + oltin glow
+    - draggable      → drag & drop
+    - hint_glow      → yashil glow (tashlash mumkin bo'lgan joy)
     """
     card      = ObjectProperty(None, allownone=True)
     selected  = BooleanProperty(False)
     face_up   = BooleanProperty(True)
     draggable = BooleanProperty(True)
     glow      = BooleanProperty(False)
+    hint_glow = BooleanProperty(False)   # Yashil "bu yerga tashlang" ko'rsatgich
+    is_manually_moved = BooleanProperty(False)
 
     def __init__(self, card=None, face_up=True, draggable=True, **kwargs):
         super().__init__(**kwargs)
@@ -43,54 +53,21 @@ class CardWidget(Widget):
         self._selected    = False
         self._drag_touch  = None
         self._orig_pos    = None
-        self._orig_parent = None
-        self._img_widget  = None
-
-        self._setup_image()
+        self._base_y      = None    # Home Y (selection animatsiyasi uchun)
 
         self.bind(
-            pos      = self._update_image_pos,
-            card     = self._on_card_change,
-            face_up  = self._on_card_change,
-            selected = self._on_select,
+            pos       = self._redraw,
+            size      = self._redraw,
+            card      = self._redraw,
+            face_up   = self._redraw,
+            selected  = self._on_select_change,
+            glow      = self._redraw,
+            hint_glow = self._redraw,
         )
+        self._redraw()
 
-    # ─── Rasm ─────────────────────────────────────────────────────────────────
-    def _setup_image(self):
-        self._draw_canvas_card()
-        if self._img_widget:
-            try:
-                self.remove_widget(self._img_widget)
-            except Exception:
-                pass
-
-        img_path = self._get_image_path()
-
-        if img_path and os.path.exists(img_path):
-            self._img_widget = KivyImage(
-                source   = img_path,
-                pos      = self.pos,
-                size     = self.size,
-                fit_mode = 'contain',
-            )
-            self.add_widget(self._img_widget)
-        else:
-            # Rasm yo'q — canvas orqali chizamiz
-            self._draw_canvas_card()
-
-    def _get_image_path(self) -> str:
-        return ''
-
-    def _on_card_change(self, *args):
-        self._setup_image()
-
-    def _update_image_pos(self, *args):
-        if self._img_widget:
-            self._img_widget.pos  = self.pos
-            self._img_widget.size = self.size
-
-    def _draw_canvas_card(self, *args):
-        """Card ni faqat canvasda yuqori sifatda chizish"""
+    # ─── Chizish ──────────────────────────────────────────────────────────────
+    def _redraw(self, *args):
         self.canvas.clear()
         with self.canvas:
             if not self.face_up or self.card is None:
@@ -99,114 +76,166 @@ class CardWidget(Widget):
                 self._draw_face()
 
     def _draw_back(self):
-        """Yopiq karta orqa tomoni"""
-        Color(*COLORS['surface'])
-        RoundedRectangle(pos=self.pos, size=self.size, radius=[CARD_RADIUS])
-        Color(*COLORS['gold'][:3], 0.8)
-        Line(rounded_rectangle=[self.x, self.y, self.width, self.height,
-                                 CARD_RADIUS], width=1.2)
-        # Ko'ndalang naqsh (Oltin chiziqlar)
+        """Luxury orqa tomon — qoʻyuq yashil + oltin naqsh"""
+        x, y, w, h = self.x, self.y, self.width, self.height
+        r = CARD_RADIUS
+
+        # Soya
+        Color(0, 0, 0, 0.35)
+        RoundedRectangle(pos=(x + 3, y - 3), size=(w, h), radius=[r])
+
+        # Asosiy fon (koʻyuq zaytun)
+        Color(0.07, 0.20, 0.12, 1)
+        RoundedRectangle(pos=(x, y), size=(w, h), radius=[r])
+
+        # Ichki ramka
+        Color(*COLORS['gold'][:3], 0.9)
+        Line(rounded_rectangle=[x+2, y+2, w-4, h-4, r-1], width=1.1)
+
+        # Tashqi ramka
+        Color(*COLORS['gold'][:3], 0.5)
+        Line(rounded_rectangle=[x, y, w, h, r], width=0.8)
+
+        # Diagonal naqsh chiziqlari
+        Color(*COLORS['gold'][:3], 0.08)
+        step = 14
+        for i in range(-h, w + h, step):
+            x1 = x + max(0, i)
+            y1 = y if i >= 0 else y + min(-i, h)
+            x2 = x + min(w, i + h)
+            y2 = y2 = y + h if i + h <= w else y + h - (i + h - w)
+            Line(points=[x1, y1, x2, y2], width=0.8)
+
+        # Markaziy oltin doira
+        cx, cy = x + w / 2, y + h / 2
         Color(*COLORS['gold'][:3], 0.25)
-        step = 16
-        for i in range(0, int(self.width), step):
-            Line(points=[self.x + i, self.y,
-                         self.x + i, self.y + self.height], width=1.0)
-            Line(points=[self.x, self.y + i,
-                         self.x + self.width, self.y + i], width=1.0)
-        
-        # O'rta logo
-        Color(*COLORS['surface_alt'][:3], 0.9)
-        Ellipse(pos=(self.center_x - 18, self.center_y - 18), size=(36, 36))
+        Ellipse(pos=(cx - 22, cy - 22), size=(44, 44))
+        Color(*COLORS['gold'][:3], 0.7)
+        Line(circle=(cx, cy, 22), width=1.2)
+
+        # "D" harfi
         Color(*COLORS['gold'][:3], 1.0)
-        Line(circle=(self.center_x, self.center_y, 18), width=1.2)
-        
-        from kivy.core.text import Label as CoreLabel
-        lbl = CoreLabel(text='D', font_size=20, bold=True, color=COLORS['gold'])
-        lbl.refresh()
-        tex = lbl.texture
+        tex = _core_label('D', font_size=22, bold=True, color=(*COLORS['gold'][:3], 1))
         if tex:
             Rectangle(texture=tex,
-                      pos=(self.center_x - tex.width/2, self.center_y - tex.height/2),
+                      pos=(cx - tex.width/2, cy - tex.height/2),
                       size=tex.size)
 
     def _draw_face(self):
-        """Karta yuzi (rasm bo'lmasa)"""
+        """Karta yuzi — aniq qiymat va mast belgisi"""
         card = self.card
+        x, y, w, h = self.x, self.y, self.width, self.height
+        r = CARD_RADIUS
         is_red = card.suit in ('hearts', 'diamonds')
+        tc = COLORS['red_suit'] if is_red else (0.10, 0.10, 0.18, 1)
 
-        # Fon
-        Color(*COLORS['card_face'])
-        RoundedRectangle(pos=self.pos, size=self.size, radius=[CARD_RADIUS])
+        # Soya
+        Color(0, 0, 0, 0.3)
+        RoundedRectangle(pos=(x + 3, y - 3), size=(w, h), radius=[r])
 
-        # Chegara
-        glow_c = COLORS['gold_light'] if self.glow else COLORS['card_border']
-        Color(*glow_c[:3], 1.0)
-        Line(rounded_rectangle=[self.x, self.y, self.width, self.height,
-                                 CARD_RADIUS], width=1.2)
+        # Oq fon
+        Color(0.98, 0.96, 0.93, 1)
+        RoundedRectangle(pos=(x, y), size=(w, h), radius=[r])
 
-        # Suit colour
-        tc = COLORS['red_suit'] if is_red else COLORS['black_suit']
-        Color(*tc[:3], 1.0)
-
-        # Qiymat + mast belgisi
-        from kivy.core.text import Label as CoreLabel
-        from core.constants import VALUE_NAMES, SUIT_SYMBOLS
+        # Glow/Hint ko'rsatgich
+        if self.hint_glow:
+            Color(0.2, 0.9, 0.3, 0.8)
+            Line(rounded_rectangle=[x-1, y-1, w+2, h+2, r+1], width=2.2)
+        elif self.glow or self.selected:
+            Color(*COLORS['gold_light'][:3], 0.95)
+            Line(rounded_rectangle=[x-1, y-1, w+2, h+2, r+1], width=2.0)
+        else:
+            Color(*COLORS['card_border'][:3], 0.6)
+            Line(rounded_rectangle=[x, y, w, h, r], width=0.9)
 
         val_str = VALUE_NAMES.get(card.value, str(card.value))
         sym_str = SUIT_SYMBOLS.get(card.suit, '')
 
-        # Yuqori burchak
-        txt = f"{val_str}\n{sym_str}"
-        lbl = CoreLabel(text=txt, font_name='DejaVu', font_size=20, bold=True, color=tc, halign='center', line_height=0.9)
-        lbl.refresh()
-        tex = lbl.texture
-        if tex:
-            Rectangle(texture=tex, pos=(self.x + 8, self.y + self.height - tex.height - 8), size=tex.size)
-            
-        # O'rtada katta suit belgisi
-        lbl_center = CoreLabel(text=sym_str, font_name='DejaVu', font_size=56, color=tc)
-        lbl_center.refresh()
-        tex_center = lbl_center.texture
-        if tex_center:
-            Rectangle(texture=tex_center,
-                      pos=(self.center_x - tex_center.width/2, self.center_y - tex_center.height/2),
-                      size=tex_center.size)
+        # Yuqori chap burchak
+        Color(*tc[:3], 1)
+        tex_val = _core_label(val_str, font_size=14, bold=True,
+                               color=(*tc[:3], 1), font_name='DejaVu')
+        if tex_val:
+            Rectangle(texture=tex_val,
+                      pos=(x + 5, y + h - tex_val.height - 4),
+                      size=tex_val.size)
+
+        tex_sym_sm = _core_label(sym_str, font_size=13, color=(*tc[:3], 1),
+                                  font_name='DejaVu')
+        if tex_sym_sm:
+            Rectangle(texture=tex_sym_sm,
+                      pos=(x + 5, y + h - tex_val.height - tex_sym_sm.height - 6),
+                      size=tex_sym_sm.size)
+
+        # Pastki oʻng burchak (teskari)
+        if tex_val:
+            Rectangle(texture=tex_val,
+                      pos=(x + w - tex_val.width - 5,
+                           y + 4 + (tex_sym_sm.height if tex_sym_sm else 0)),
+                      size=tex_val.size)
+        if tex_sym_sm:
+            Rectangle(texture=tex_sym_sm,
+                      pos=(x + w - tex_sym_sm.width - 5, y + 4),
+                      size=tex_sym_sm.size)
+
+        # Markaziy katta mast belgisi
+        tex_big = _core_label(sym_str, font_size=46, color=(*tc[:3], 0.88),
+                               font_name='DejaVu')
+        if tex_big:
+            Rectangle(texture=tex_big,
+                      pos=(x + w/2 - tex_big.width/2,
+                           y + h/2 - tex_big.height/2),
+                      size=tex_big.size)
 
     # ─── Tanlash ──────────────────────────────────────────────────────────────
-    def _on_select(self, *args):
-        anim = Animation(
-            y = self.y + (14 if self.selected else -14),
-            duration = 0.15, t='out_sine'
-        )
-        anim.start(self)
+    def _on_select_change(self, *args):
+        if self._base_y is None:
+            self._base_y = self.y
+        target_y = self._base_y + (16 if self.selected else 0)
+        Animation(y=target_y, duration=0.18, t='out_sine').start(self)
         self.glow = self.selected
+        self._redraw()
 
     def select(self):
+        if self._base_y is None:
+            self._base_y = self.y
         self.selected = True
 
     def deselect(self):
         self.selected = False
 
-    def toggle_select(self):
-        self.selected = not self.selected
+    def set_base_y(self, y):
+        """HandWidget pozitsiyalanishidan keyin base_y ni yangilash"""
+        self._base_y = y
+        if not self.selected:
+            self.y = y
+
+    # ─── Hint ─────────────────────────────────────────────────────────────────
+    def set_hint(self, active: bool):
+        self.hint_glow = active
+        self._redraw()
 
     # ─── Touch (tap va drag) ──────────────────────────────────────────────────
     def on_touch_down(self, touch):
         if not self.collide_point(*touch.pos):
             return False
-        if not self.draggable:
-            touch.grab(self)
-            return True
-
         touch.grab(self)
-        self._drag_touch = touch
-        self._orig_pos   = tuple(self.pos)
+        self._drag_touch  = touch
+        self._orig_pos    = tuple(self.pos)
+        if self._base_y is None:
+            self._base_y = self.y
         return True
 
     def on_touch_move(self, touch):
         if touch.grab_current is not self or not self.draggable:
             return False
         self.center = touch.pos
+        # Z-tartib: drag vaqtida boshqalar ustida bo'lishini ta'minlash
+        p = self.parent
+        if p and p.children[0] is not self:
+            p.remove_widget(self)
+            p.add_widget(self)
+        self.is_manually_moved = True
         return True
 
     def on_touch_up(self, touch):
@@ -215,58 +244,52 @@ class CardWidget(Widget):
         touch.ungrab(self)
 
         if self.draggable and self._orig_pos:
-            dx = abs(self.center_x - touch.opos[0])
-            dy = abs(self.center_y - touch.opos[1])
+            dx = abs(touch.pos[0] - touch.opos[0])
+            dy = abs(touch.pos[1] - touch.opos[1])
 
             if dx < 10 and dy < 10:
-                # Tap — tanlash
-                self.toggle_select()
-                if self.parent and hasattr(self.parent, 'on_card_tap'):
-                    self.parent.on_card_tap(self)
-            else:
-                # Drop — qayt yoki joylash
-                if self.parent and hasattr(self.parent, 'on_card_drop'):
-                    dropped = self.parent.on_card_drop(self, touch.pos)
-                    if not dropped:
-                        self._return_home()
-                else:
-                    self._return_home()
-
+                # Tap — tanlash/bekor
+                if self.parent and hasattr(self.parent, '_on_card_touch'):
+                    self.parent._on_card_touch(self, touch)
+        elif not self.draggable:
+            # Non-draggable tap
+            if self.parent and hasattr(self.parent, '_on_card_touch'):
+                self.parent._on_card_touch(self, touch)
+        
+        # O'zboshimcha harakatlantirish imkoniyati (xohlagan joyga qo'yish)
+        # return_home chaqirilmaydi (foydalanuvchi xohishi)
+        
         self._drag_touch = None
         return True
 
     def _return_home(self):
-        """Drag bekor bo'lganda orig pozitsiyaga qaytish"""
         if self._orig_pos:
             Animation(
                 x=self._orig_pos[0], y=self._orig_pos[1],
-                duration=0.25, t='out_cubic'
+                duration=0.22, t='out_cubic'
             ).start(self)
 
     # ─── Animatsiyalar ────────────────────────────────────────────────────────
     def animate_deal(self, from_pos, delay=0.0):
-        """Karta berish animatsiyasi"""
         orig_pos = tuple(self.pos)
         self.pos = from_pos
         self.opacity = 0
 
         def _start(dt):
             anim = (
-                Animation(opacity=1, duration=0.1) &
+                Animation(opacity=1, duration=0.12) &
                 Animation(x=orig_pos[0], y=orig_pos[1],
-                          duration=0.3, t='out_cubic')
+                          duration=0.28, t='out_cubic')
             )
             anim.start(self)
 
-        from kivy.clock import Clock
         Clock.schedule_once(_start, delay)
 
     def animate_invalid(self):
-        """Noto'g'ri harakat effekti"""
         ox = self.x
         anim = (
-            Animation(x=ox - 8, duration=0.04) +
-            Animation(x=ox + 8, duration=0.04) +
+            Animation(x=ox - 9, duration=0.04) +
+            Animation(x=ox + 9, duration=0.04) +
             Animation(x=ox - 5, duration=0.04) +
             Animation(x=ox + 5, duration=0.04) +
             Animation(x=ox,     duration=0.04)

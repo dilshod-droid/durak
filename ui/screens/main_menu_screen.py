@@ -1,133 +1,116 @@
 """
-ui/screens/main_menu_screen.py — Bosh Menyu
-Logo + 4 ta tugma (stagger animatsiya).
+ui/screens/main_menu_screen.py — Asosiy menyu
 """
 from kivy.uix.screenmanager import Screen
-from kivy.uix.floatlayout  import FloatLayout
-from kivy.uix.boxlayout    import BoxLayout
-from kivy.uix.label        import Label
-from kivy.uix.widget       import Widget
-from kivy.graphics         import (Color, Rectangle, RoundedRectangle,
-                                    Line, Ellipse)
-from kivy.animation        import Animation
-from kivy.clock            import Clock
-from kivy.app              import App
-from ui.components.luxury_button import LuxuryButton
-from ui.components.animated_bg   import AnimatedBackground
-from core.constants        import COLORS, FONT_SIZES
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.label import Label
+from kivy.uix.image import Image
+from kivy.animation import Animation
+from kivy.clock import Clock
+from kivy.app import App
+from kivy.metrics import dp
 
+from ui.components.luxury_button import LuxuryButton
+from ui.components.animated_bg import AnimatedBackground
+from core.constants import COLORS, FONT_SIZES
 
 class MainMenuScreen(Screen):
+    """
+    O'yinning asosiy kirish qismi.
+    """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._built = False
-        self._btn_list = []
 
     def on_enter(self):
         if not self._built:
             self._build_ui()
             self._built = True
-        self._animate_entrance()
         
-        if hasattr(self, '_bg') and self._bg:
+        # Animatsiya: tugmalarni paydo qilish
+        self._animate_in()
+        if self._bg:
             self._bg.start()
 
-        app = App.get_running_app()
-        if app and hasattr(app, 'audio') and app.audio:
-            app.audio.on_main_menu()
-
     def on_leave(self):
-        if hasattr(self, '_bg') and self._bg:
+        if self._bg:
             self._bg.stop()
 
-    # ─── UI Yaratish ──────────────────────────────────────────────────────────
     def _build_ui(self):
         root = FloatLayout()
         self.add_widget(root)
 
-        # Fon
-        self._bg = AnimatedBackground(size_hint=(1, 1), pos_hint={'x': 0, 'y': 0})
+        # ─── Fon (Animated Background) ─────────────────
+        self._bg = AnimatedBackground()
         root.add_widget(self._bg)
 
-        # Markaziy ustun
-        col = BoxLayout(
-            orientation = 'vertical',
-            spacing     = 14,
-            padding     = [32, 0],
-            size_hint   = (0.85, None),
-            pos_hint    = {'center_x': 0.5, 'center_y': 0.5},
+        # ─── Logo va Sarlavha ───────────────────────────
+        header = BoxLayout(
+            orientation='vertical',
+            size_hint=(1, 0.4),
+            pos_hint={'center_x': 0.5, 'top': 0.95},
+            spacing=dp(10)
         )
-        root.add_widget(col)
+        root.add_widget(header)
 
-        # ─── Logo ─────────────────────────────────────────────────────────
-        logo_box = BoxLayout(orientation='vertical', size_hint_y=None, height=140)
-        col.add_widget(logo_box)
-
-        logo_lbl = Label(
-            text      = '',
-            font_size = 72,
-            size_hint_y = None,
-            height    = 80,
-            halign    = 'center',
+        # Logo rasmi (placeholder o'rniga vizual element)
+        logo_container = FloatLayout(size_hint_y=0.6)
+        logo = Image(
+            source='assets/cards/card_back.png',  # Karta orqasi logotip kabi
+            size_hint=(None, None),
+            size=(dp(100), dp(140)),
+            pos_hint={'center_x': 0.5, 'center_y': 0.5}
         )
-        logo_box.add_widget(logo_lbl)
+        logo_container.add_widget(logo)
+        header.add_widget(logo_container)
 
-        title_lbl = Label(
-            text      = 'DURAK',
-            font_size = FONT_SIZES['display'] + 4,
-            bold      = True,
-            color     = COLORS['gold'],
-            size_hint_y = None,
-            height    = 50,
-            halign    = 'center',
+        self._title_lbl = Label(
+            text='DURAK',
+            font_name='Cinzel',
+            font_size=dp(48),
+            bold=True,
+            color=COLORS['gold'],
+            size_hint_y=0.4
         )
-        logo_box.add_widget(title_lbl)
+        header.add_widget(self._title_lbl)
 
-        # ─── Ajratgich ────────────────────────────────────────────────────
-        sep = _GoldDivider(size_hint_y=None, height=2)
-        col.add_widget(sep)
-
-        # ─── Tugmalar ─────────────────────────────────────────────────────
-        t = self._get_texts()
-        btn_data = [
-            (t['play'],        'primary',   self._on_play),
-            (t['statistics'],  'secondary', self._on_stats),
-            (t['settings'],   'secondary', self._on_settings),
-            (t['rules'],       'secondary', self._on_rules),
-        ]
-
-        self._btn_list = []
-        for text, style, callback in btn_data:
-            btn = LuxuryButton(text=text, style=style)
-            btn.bind(on_release=lambda inst, cb=callback: cb())
-            btn.opacity = 0
-            col.add_widget(btn)
-            self._btn_list.append(btn)
-
-        # Bo'sh ajratgich
-        col.add_widget(Widget(size_hint_y=None, height=8))
-
-        # Versiya
-        ver = Label(
-            text      = 'v 1.0.0',
-            font_size = FONT_SIZES['tiny'],
-            color     = COLORS['text_muted'],
-            size_hint_y = None,
-            height    = 24,
-            halign    = 'center',
+        # ─── Tugmalar Bloki ──────────────────────────────
+        self._btn_col = BoxLayout(
+            orientation='vertical',
+            size_hint=(0.8, 0.45),
+            pos_hint={'center_x': 0.5, 'y': 0.08},
+            spacing=dp(15)
         )
-        col.add_widget(ver)
+        root.add_widget(self._btn_col)
 
-        # Ustunning balandligini hisoblash
-        col.height = 140 + 2 + len(btn_data) * 52 + (len(btn_data) - 1) * 14 + 8 + 24
+        texts = self._get_texts()
 
-    # ─── Animatsiya ───────────────────────────────────────────────────────────
-    def _animate_entrance(self):
-        for i, btn in enumerate(self._btn_list):
-            btn.opacity = 0
+        self._btn_play = LuxuryButton(text=texts['play'], style='primary')
+        self._btn_play.bind(on_release=lambda *a: self._on_play())
 
-            def _show(dt, b=btn):
+        self._btn_stats = LuxuryButton(text=texts['stats'], style='secondary')
+        self._btn_stats.bind(on_release=lambda *a: self._on_stats())
+
+        self._btn_settings = LuxuryButton(text=texts['settings'], style='secondary')
+        self._btn_settings.bind(on_release=lambda *a: self._on_settings())
+
+        self._btn_rules = LuxuryButton(text=texts['rules'], style='secondary')
+        self._btn_rules.bind(on_release=lambda *a: self._on_rules())
+
+        # Tugmalarni yashirin (opacity=0) holatda qo'shish
+        for b in [self._btn_play, self._btn_stats, self._btn_settings, self._btn_rules]:
+            b.opacity = 0
+            self._btn_col.add_widget(b)
+
+    def _animate_in(self):
+        """Tugmalarni ketma-ket paydo qilish"""
+        buttons = [self._btn_play, self._btn_stats, self._btn_settings, self._btn_rules]
+        for i, b in enumerate(buttons):
+            b.opacity = 0
+            # Kechikish bilan animatsiya
+            def _show(dt, b=b):
                 anim = Animation(opacity=1, duration=0.35, t='out_cubic')
                 anim.start(b)
 
@@ -135,7 +118,7 @@ class MainMenuScreen(Screen):
 
     # ─── Navigatsiya ──────────────────────────────────────────────────────────
     def _on_play(self):
-        App.get_running_app().navigate_to('difficulty')
+        App.get_running_app().navigate_to('mode_selection')
 
     def _on_stats(self):
         App.get_running_app().navigate_to('stats')
@@ -148,25 +131,11 @@ class MainMenuScreen(Screen):
 
     # ─── Til matni ────────────────────────────────────────────────────────────
     def _get_texts(self) -> dict:
-        try:
-            app = App.get_running_app()
-            if app and hasattr(app, 'lang'):
-                return app.lang
-        except Exception:
-            pass
+        app = App.get_running_app()
+        lang = getattr(app, 'lang', {})
         return {
-            'play': "O'ynash", 'statistics': 'Statistika',
-            'settings': 'Sozlamalar', 'rules': 'Qoidalar'
+            'play':     lang.get('play', 'O\'YNASH'),
+            'stats':    lang.get('stats', 'STATISTIKA'),
+            'settings': lang.get('settings', 'SOZLAMALAR'),
+            'rules':    lang.get('rules', 'QOIDALAR')
         }
-
-
-class _GoldDivider(Widget):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.bind(pos=self._draw, size=self._draw)
-
-    def _draw(self, *args):
-        self.canvas.clear()
-        with self.canvas:
-            Color(*COLORS['gold'][:3], 0.5)
-            Rectangle(pos=(self.x + 30, self.y), size=(self.width - 60, 1))

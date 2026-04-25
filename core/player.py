@@ -106,3 +106,20 @@ class Player:
     def __repr__(self):
         ai_tag = " [AI]" if self.is_ai else ""
         return f"Player({self.name}{ai_tag}, {self.card_count} karta)"
+
+    def to_dict(self):
+        return {
+            'name': self.name,
+            'is_ai': self.is_ai,
+            'hand': [c.to_dict() for c in self.hand],
+            'wins': self.wins,
+            'losses': self.losses
+        }
+
+    @staticmethod
+    def from_dict(d):
+        p = Player(name=d['name'], is_ai=d['is_ai'])
+        p.hand = [Card.from_dict(c) for c in d['hand']]
+        p.wins = d['wins']
+        p.losses = d['losses']
+        return p

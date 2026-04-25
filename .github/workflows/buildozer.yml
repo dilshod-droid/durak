@@ -1,0 +1,35 @@
+name: Buildozer Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout manba kodlari
+        uses: actions/checkout@v3
+
+      - name: Java 17 o'rnatish
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Buildozer orqali APK yig'ish
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          command: buildozer android debug
+          buildozer_version: master
+
+      - name: Tayyor APK ni yuklash (Artifact)
+        uses: actions/upload-artifact@v3
+        with:
+          name: Durak-O'yini-APK
+          path: bin/*.apk

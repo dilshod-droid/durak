@@ -1,11 +1,19 @@
 """
 managers/stats_manager.py — Statistika boshqaruvchisi
 SQLite orqali o'yin statistikasini saqlaydi.
+
+Tuzatishlar:
+  - __del__ o'rniga aniq close() metodi (xavfsiz)
+  - Barcha DB operatsiyalari try/except bilan o'ralgan
+  - logging qo'shildi
 """
 import os
 import sqlite3
+import logging
 from datetime import datetime
 from core.constants import BASE_DIR
+
+logger = logging.getLogger(__name__)
 
 
 DB_FILE = os.path.join(BASE_DIR, 'data', 'stats.db')
@@ -33,8 +41,11 @@ class StatsManager:
         self._create_tables()
 
     def _create_tables(self):
-        self._conn.execute(CREATE_TABLE_SQL)
-        self._conn.commit()
+        try:
+            self._conn.execute(CREATE_TABLE_SQL)
+            self._conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"[Stats] Jadval yaratishda xato: {e}")
 
     # ─── Yozish ───────────────────────────────────────────────────────────────
     def record_game(
@@ -52,8 +63,12 @@ class StatsManager:
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        self._conn.execute(sql, (now, difficulty, mode, result, turns, cards_taken, duration_sec))
-        self._conn.commit()
+        try:
+            self._conn.execute(sql, (now, difficulty, mode, result, turns, cards_taken, duration_sec))
+            self._conn.commit()
+            logger.debug(f"[Stats] O'yin yozildi: {result}, {difficulty}, {turns} tur")
+        except sqlite3.Error as e:
+            logger.error(f"[Stats] Yozishda xato: {e}")
 
     # ─── O'qish ───────────────────────────────────────────────────────────────
     def get_summary(self) -> dict:
@@ -106,11 +121,28 @@ class StatsManager:
     # ─── Tozalash ─────────────────────────────────────────────────────────────
     def reset(self):
         """Barcha statistikani o'chirish"""
-        self._conn.execute("DELETE FROM stats")
-        self._conn.commit()
-
-    def __del__(self):
         try:
-            self._conn.close()
-        except Exception:
-            pass
+            self._conn.execute("DELETE FROM stats")
+            self._conn.commit()
+            logger.info("[Stats] Barcha statistika o'chirildi")
+        except sqlite3.Error as e:
+            logger.error(f"[Stats] Tozalashda xato: {e}")
+
+    def close(self):
+        """
+        DB ulanishini yopish.
+        __del__ o'rniga aniq close() ishlating — xavfsizroq.
+        """
+        try:
+            if self._conn:
+                self._conn.close()
+                self._conn = None
+                logger.debug("[Stats] DB ulanishi yopildi")
+        except Exception as e:
+            logger.warning(f"[Stats] DB yopishda xato: {e}")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()

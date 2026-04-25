@@ -130,3 +130,50 @@ class GameState:
         dfn = self.defender.name if self.defender else '?'
         return (f"GameState(phase={self.phase}, turn={self.turn_count}, "
                 f"atk={atk}, def={dfn}, table={len(self.table)})")
+
+    def to_dict(self):
+        return {
+            'trump_card': self.trump_card.to_dict() if self.trump_card else None,
+            'players': [p.to_dict() for p in self.players],
+            'attacker_idx': self.attacker_idx,
+            'defender_idx': self.defender_idx,
+            'table': [(atk.to_dict(), dfn.to_dict() if dfn else None) 
+                      for atk, dfn in self.table],
+            'phase': self.phase,
+            'turn_count': self.turn_count,
+            'is_deck_empty': self.deck.is_empty if self.deck else True,
+            'deck_count': self.deck.card_count if self.deck else 0
+        }
+
+    def from_dict(self, d):
+        from core.player import Player
+        from core.card   import Card
+        
+        self.players = [Player.from_dict(p) for p in d['players']]
+        self.attacker_idx = d['attacker_idx']
+        self.defender_idx = d['defender_idx']
+        
+        # Table parsing: allow second card (defense) to be None
+        self.table = []
+        for atk_d, dfn_d in d['table']:
+            self.table.append((
+                Card.from_dict(atk_d),
+                Card.from_dict(dfn_d) if dfn_d else None
+            ))
+            
+        self.phase = d['phase']
+        self.turn_count = d['turn_count']
+        
+        # Trump card and Deck count (Client side "Ghost Deck")
+        from core.deck import Deck
+        if not self.deck: 
+            self.deck = Deck()
+            self.deck.clear() # Clear initial deck
+        
+        if d['trump_card']:
+            self.deck.trump_card = Card.from_dict(d['trump_card'])
+            self.deck.trump_suit = self.deck.trump_card.suit
+        
+        # Override counts for UI
+        self.deck._override_count = d.get('deck_count', 0)
+        self.deck._is_empty_flag = d.get('is_deck_empty', True)

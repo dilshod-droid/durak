@@ -65,20 +65,32 @@ class AIPlayer:
     ) -> Optional[Card]:
         """
         Strategik hujum:
-        1. Raqib qo'lida ko'p bo'lgan qiymatlarni tashlash
-        2. Kozirlarni oxirgacha saqlash
-        3. Eng kichik qiymatli o'lim kartasini sinab ko'rish
+        1. Juftliklar (pair) bor bo'lsa — ularni ishlatish (raqibni qiynash)
+        2. Kozir bo'lmagan eng kichik karta bilan boshlash
+        3. Kozirlarni oxirigacha asrash
         """
         non_trump = [c for c in valid if c.suit != trump]
         trumps    = [c for c in valid if c.suit == trump]
 
+        # Bir xil qiymatdagi juftliklar bormi? (stolga podkidnoy qilish uchun)
+        if table:
+            value_counts: dict = {}
+            for c in non_trump:
+                value_counts[c.value] = value_counts.get(c.value, 0) + 1
+            # Juftliklari bor qiymatlar — raqibni ko'proq karta olishga majburlash
+            paired = [c for c in non_trump if value_counts.get(c.value, 0) >= 2]
+            if paired:
+                return min(paired, key=lambda c: c.value)
+
+        # Oddiy holat: kozir bo'lmagan eng kichik
         if non_trump:
-            # Eng kichik ikki karta
             non_trump.sort(key=lambda c: c.value)
             return non_trump[0]
-        elif trumps:
-            trumps.sort(key=lambda c: c.value)
-            return trumps[0]
+
+        # Faqat kozirlar qolgan
+        if trumps:
+            return min(trumps, key=lambda c: c.value)
+
         return None
 
     # =========================================================================
@@ -123,16 +135,18 @@ class AIPlayer:
     def _defend_hard(self, possible: List[Card], atk: Card, trump: str) -> Optional[Card]:
         """
         Optimal yopish:
-        1. Bir xil mastdan minimal margin bilan yopish
-        2. Kozirni faqat zarur hollarda ishlatish
+        1. Bir xil mastdan MINIMAL margin bilan yopish (tejamkor)
+        2. Kozirni faqat zarur holda va eng kichigini ishlatish
+        3. Agar kozirlarni saqlash mumkin bo'lsa — saqla
         """
         same_suit = [c for c in possible if c.suit == atk.suit]
         if same_suit:
-            # Eng kichik margin bilan yopish
+            # Eng kichik margin: raqibdan faqat bir qadam yuqori
             return min(same_suit, key=lambda c: c.value - atk.value)
 
         trump_cards = [c for c in possible if c.suit == trump]
         if trump_cards:
+            # Kozirlar orasidan eng kuchsizini ishlat
             return min(trump_cards, key=lambda c: c.value)
 
         return min(possible, key=lambda c: c.value)
@@ -155,7 +169,7 @@ class AIPlayer:
             return False
 
         if self.difficulty == 'easy':
-            # 30% ehtimol bilan oladi (hamma vaqt ham yopa olmas)
+            # 15% ehtimol bilan tasodifiy oladi (hamma vaqt ham yopa olmas)
             can_defend_all = all(
                 any(c.beats(atk, trump) for c in hand)
                 for atk in undefended
@@ -164,11 +178,31 @@ class AIPlayer:
                 return True
             return random.random() < 0.15
 
-        # Medium va Hard: faqat yopib bo'lmasa oladi
-        return not all(
+        if self.difficulty == 'medium':
+            # Faqat yopib bo'lmasa oladi
+            return not all(
+                any(c.beats(atk, trump) for c in hand)
+                for atk in undefended
+            )
+
+        # Hard: Karta iqtisodini hisoblash
+        # Stoldagi kartalar soni qo'ldagi kartalar sonidan ko'p bo'lsa — olmaslik
+        # Aks holda, yopib bo'lmasa yoki juda qimmat bo'lsa olish
+        can_defend_all = all(
             any(c.beats(atk, trump) for c in hand)
             for atk in undefended
         )
+        if not can_defend_all:
+            return True
+
+        # Qo'lda kozirlar bor, ularni sarflamaslik uchun kartalarni olish
+        trump_needed = sum(
+            1 for atk in undefended
+            if not any(c.beats(atk, trump) for c in hand if c.suit != trump)
+            and any(c.beats(atk, trump) for c in hand if c.suit == trump)
+        )
+        # Agar 2 dan ko'p kozir sarflash kerak bo'lsa — olgan ma'qul
+        return trump_needed >= 2
 
     # =========================================================================
     # YORDAMCHILAR

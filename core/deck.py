@@ -61,17 +61,29 @@ class Deck:
         return self.deal(min(need, len(self.cards)))
 
     # ─── Xossalar ─────────────────────────────────────────────────────────────
+    def clear(self):
+        """Qo'dani tozalash (Client uchun)"""
+        self.cards = []
+
     @property
     def remaining(self) -> int:
         """Qo'dada qolgan kartalar soni"""
+        if hasattr(self, '_override_count'):
+            return self._override_count
         return len(self.cards)
 
     @property
+    def card_count(self) -> int:
+        return self.remaining
+
+    @property
     def is_empty(self) -> bool:
+        if hasattr(self, '_is_empty_flag'):
+            return self._is_empty_flag
         return len(self.cards) == 0
 
     def __len__(self):
-        return len(self.cards)
+        return self.remaining
 
     def __repr__(self):
         trump = f" | Kozir: {self.trump_card}" if self.trump_card else ""

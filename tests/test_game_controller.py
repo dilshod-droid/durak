@@ -1,8 +1,40 @@
 """
 tests/test_game_controller.py — GameController uchun unit testlar
+
+Tuzatishlar:
+  - Kivy mock qo'shildi: testlar display/Kivy ilova ishga tushmasdan o'tishi uchun
+  - Draw holati testi qo'shildi
 """
 import sys
 import os
+import types
+
+# ─ Kivy ni test muhitida ishlashi uchun Mock qilish ───────────────────────────────────
+def _mock_kivy():
+    """Kivy modullarini mock qilish — display kerak qilmaydi"""
+    # kivy.clock
+    clock_mod = types.ModuleType('kivy.clock')
+    class _ClockMock:
+        @staticmethod
+        def schedule_once(cb, delay=0):
+            pass  # Test muhitida kechiktirish yo'q
+        @staticmethod
+        def schedule_interval(cb, interval):
+            class _Token:
+                def cancel(self): pass
+            return _Token()
+        @staticmethod
+        def unschedule(cb):
+            pass
+    clock_mod.Clock = _ClockMock()
+
+    # kivy paketi
+    kivy_mod = types.ModuleType('kivy')
+    sys.modules.setdefault('kivy', kivy_mod)
+    sys.modules['kivy.clock'] = clock_mod
+
+_mock_kivy()
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.game_controller import GameController
@@ -236,6 +268,36 @@ class TestFullGame:
 
         if gc.state.phase == PHASE_END:
             assert gc.state.winner is not None
+
+
+class TestDrawCase:
+    def test_draw_attacker_wins(self):
+        """
+        Ikkala o'yinchi ham bir vaqtda qo'li bo'shab qolsa
+        hujumchi g'olib deb hisoblanishi kerak.
+        """
+        gc = GameController(difficulty='easy', mode='podkidnoy')
+        gc.start_game()
+        st = gc.state
+
+        # Qo'dani bo'shatish
+        st.deck.cards.clear()
+        if hasattr(st.deck, '_is_empty_flag'):
+            del st.deck._is_empty_flag
+
+        # Ikkalasining ham qo'lini bo'shatish (draw holat)
+        attacker_idx = st.attacker_idx
+        defender_idx = st.defender_idx
+        st.players[attacker_idx].hand.clear()
+        st.players[defender_idx].hand.clear()
+
+        gc._check_winner()
+
+        assert st.phase == PHASE_END, "O'yin tugashi kerak edi"
+        assert st.winner is not None, "G'olib o'rnatilishi kerak"
+        assert st.winner == st.players[attacker_idx], (
+            "Draw holatda hujumchi g'olib bo'lishi kerak"
+        )
 
 
 if __name__ == '__main__':

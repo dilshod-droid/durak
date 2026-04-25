@@ -43,8 +43,7 @@ android.entrypoint = main.py
 # (list) List of service to declare
 #services = NAME:ENTRYPOINT_TO_PY,NAME2:ENTRYPOINT2_TO_PY
 
-# (str) The Android arch to build for, choices: armeabi-v7a, arm64-v8a, x86, x86_64
-android.arch = arm64-v8a
+# (str) The Android arch to build for — android.archs yuqorida belgilangan (13-qator)
 
 [buildozer]
 log_level = 2
